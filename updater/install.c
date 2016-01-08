@@ -33,6 +33,7 @@
 #include <sys/xattr.h>
 #include <linux/xattr.h>
 #include <inttypes.h>
+#include <blkid/blkid.h>
 
 #include "bootloader.h"
 #include "applypatch/applypatch.h"
@@ -105,6 +106,7 @@ Value* MountFn(const char* name, State* state, int argc, Expr* argv[]) {
     char* mount_point;
     char* mount_options;
     bool has_mount_options;
+
     if (argc == 5) {
         has_mount_options = true;
         if (ReadArgs(state, argv, 5, &fs_type, &partition_type,
@@ -137,6 +139,14 @@ Value* MountFn(const char* name, State* state, int argc, Expr* argv[]) {
         goto done;
     }
 
+    scan_mounted_volumes();
+    const MountedVolume* vol = find_mounted_volume_by_mount_point(mount_point);
+    if (vol != NULL) {
+        printf("%s is already mounted\n", mount_point);
+        result = mount_point;
+        goto done;
+    }
+
     char *secontext = NULL;
 
     if (sehandle) {
@@ -156,7 +166,7 @@ Value* MountFn(const char* name, State* state, int argc, Expr* argv[]) {
         const MtdPartition* mtd;
         mtd = mtd_find_partition_by_name(location);
         if (mtd == NULL) {
-            uiPrintf(state, "%s: no mtd partition named \"%s\"",
+            uiPrintf(state, "%s: no mtd partition named \"%s\"\n",
                     name, location);
             result = strdup("");
             goto done;
@@ -169,6 +179,15 @@ Value* MountFn(const char* name, State* state, int argc, Expr* argv[]) {
         }
         result = mount_point;
     } else {
+        char* detected_fs_type = blkid_get_tag_value(NULL, "TYPE", location);
+        if (detected_fs_type != NULL) {
+            printf("detected filesystem %s for %s\n", detected_fs_type, location);
+            free(fs_type);
+            fs_type = detected_fs_type;
+        } else {
+            uiPrintf(state, "could not detect filesystem - assuming %s for %s\n", fs_type, location);
+        }
+
         if (mount(location, mount_point, fs_type,
                   MS_NOATIME | MS_NODEV | MS_NODIRATIME,
                   has_mount_options ? mount_options : "") < 0) {
@@ -313,61 +332,70 @@ Value* FormatFn(const char* name, State* state, int argc, Expr* argv[]) {
         mtd_scan_partitions();
         const MtdPartition* mtd = mtd_find_partition_by_name(location);
         if (mtd == NULL) {
-            printf("%s: no mtd partition named \"%s\"",
+            printf("%s: no mtd partition named \"%s\"\n",
                     name, location);
             result = strdup("");
             goto done;
         }
         MtdWriteContext* ctx = mtd_write_partition(mtd);
         if (ctx == NULL) {
-            printf("%s: can't write \"%s\"", name, location);
+            printf("%s: can't write \"%s\"\n", name, location);
             result = strdup("");
             goto done;
         }
         if (mtd_erase_blocks(ctx, -1) == -1) {
             mtd_write_close(ctx);
-            printf("%s: failed to erase \"%s\"", name, location);
+            printf("%s: failed to erase \"%s\"\n", name, location);
             result = strdup("");
             goto done;
         }
         if (mtd_write_close(ctx) != 0) {
-            printf("%s: failed to close \"%s\"", name, location);
+            printf("%s: failed to close \"%s\"\n", name, location);
             result = strdup("");
             goto done;
         }
         result = location;
-#ifdef USE_EXT4
-    } else if (strcmp(fs_type, "ext4") == 0) {
-        int status = make_ext4fs(location, atoll(fs_size), mount_point, sehandle);
-        if (status != 0) {
-            printf("%s: make_ext4fs failed (%d) on %s",
-                    name, status, location);
-            result = strdup("");
-            goto done;
-        }
-        result = location;
-    } else if (strcmp(fs_type, "f2fs") == 0) {
-        char *num_sectors;
-        if (asprintf(&num_sectors, "%lld", atoll(fs_size) / 512) <= 0) {
-            printf("format_volume: failed to create %s command for %s\n", fs_type, location);
-            result = strdup("");
-            goto done;
-        }
-        const char *f2fs_path = "/sbin/mkfs.f2fs";
-        const char* const f2fs_argv[] = {"mkfs.f2fs", "-t", "-d1", location, num_sectors, NULL};
-        int status = exec_cmd(f2fs_path, (char* const*)f2fs_argv);
-        free(num_sectors);
-        if (status != 0) {
-            printf("%s: mkfs.f2fs failed (%d) on %s",
-                    name, status, location);
-            result = strdup("");
-            goto done;
-        }
-        result = location;
-#endif
     } else {
-        printf("%s: unsupported fs_type \"%s\" partition_type \"%s\"",
-                name, fs_type, partition_type);
+        char* detected_fs_type = blkid_get_tag_value(NULL, "TYPE", location);
+        if (detected_fs_type != NULL) {
+            printf("detected filesystem %s for %s\n", detected_fs_type, location);
+            free(fs_type);
+            fs_type = detected_fs_type;
+        } else {
+            uiPrintf(state, "could not detect filesystem - assuming %s for %s\n", fs_type, location);
+        }
+
+        if (strcmp(fs_type, "ext4") == 0) {
+            int status = make_ext4fs(location, atoll(fs_size), mount_point, sehandle);
+            if (status != 0) {
+                printf("%s: make_ext4fs failed (%d) on %s\n",
+                        name, status, location);
+                result = strdup("");
+                goto done;
+            }
+            result = location;
+        } else if (strcmp(fs_type, "f2fs") == 0) {
+            char *num_sectors;
+            if (asprintf(&num_sectors, "%lld", atoll(fs_size) / 512) <= 0) {
+                printf("format_volume: failed to create %s command for %s\n", fs_type, location);
+                result = strdup("");
+                goto done;
+            }
+            const char *f2fs_path = "/sbin/mkfs.f2fs";
+            const char* const f2fs_argv[] = {"mkfs.f2fs", "-t", "-d1", location, num_sectors, NULL};
+            int status = exec_cmd(f2fs_path, (char* const*)f2fs_argv);
+            free(num_sectors);
+            if (status != 0) {
+                printf("%s: mkfs.f2fs failed (%d) on %s\n",
+                        name, status, location);
+                result = strdup("");
+                goto done;
+            }
+            result = location;
+        } else {
+            printf("%s: unsupported fs_type \"%s\" partition_type \"%s\"\n",
+                    name, fs_type, partition_type);
+        }
     }
 
 done:
@@ -1392,11 +1420,11 @@ Value* Sha1CheckFn(const char* name, State* state, int argc, Expr* argv[]) {
     uint8_t* arg_digest = malloc(SHA_DIGEST_SIZE);
     for (i = 1; i < argc; ++i) {
         if (args[i]->type != VAL_STRING) {
-            printf("%s(): arg %d is not a string; skipping",
+            printf("%s(): arg %d is not a string; skipping\n",
                     name, i);
         } else if (ParseSha1(args[i]->data, arg_digest) != 0) {
             // Warn about bad args and skip them.
-            printf("%s(): error parsing \"%s\" as sha-1; skipping",
+            printf("%s(): error parsing \"%s\" as sha-1; skipping\n",
                    name, args[i]->data);
         } else if (memcmp(digest, arg_digest, SHA_DIGEST_SIZE) == 0) {
             break;
