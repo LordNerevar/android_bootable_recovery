@@ -1697,7 +1697,11 @@ int TWPartitionManager::Partition_SDCard(void) {
 			return false;
 	}
 
-	TWFunc::Exec_Cmd("umount \"$SWAPPATH\"");
+	char* swappath = getenv("SWAPPATH");
+	if (swappath != NULL) {
+                TWFunc::Exec_Cmd("umount \"$SWAPPATH\"");
+	}
+
 	Device = SDCard->Actual_Block_Device;
 	// Just use the root block device
 	Device.resize(strlen("/dev/block/mmcblkX"));
