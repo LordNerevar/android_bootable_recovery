@@ -311,6 +311,9 @@ endif
 ifneq ($(TARGET_RECOVERY_INITRC),)
     TW_EXCLUDE_DEFAULT_USB_INIT := true
 endif
+ifeq ($(TW_DATA_ON_SDEXT), true)
+    LOCAL_CFLAGS += -DTW_DATA_ON_SDEXT
+endif
 
 LOCAL_ADDITIONAL_DEPENDENCIES := \
     dump_image \

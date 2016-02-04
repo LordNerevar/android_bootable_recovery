@@ -309,7 +309,7 @@ void TWPartitionManager::Output_Partition(TWPartition* Part) {
 	if (!Part->Fstab_File_System.empty())
 		printf("   Fstab_File_System: %s\n", Part->Fstab_File_System.c_str());
 	if (Part->Format_Block_Size != 0)
-		printf("   Format_Block_Size: %i\n", Part->Format_Block_Size);
+		printf("   Format_Block_Size: %lu\n", Part->Format_Block_Size);
 	if (!Part->MTD_Name.empty())
 		printf("   MTD_Name: %s\n", Part->MTD_Name.c_str());
 	string back_meth = Part->Backup_Method_By_Name();
@@ -1685,13 +1685,21 @@ int TWPartitionManager::Partition_SDCard(void) {
 #else
 	TWPartition* SDCard = Find_Partition_By_Path("/sdcard");
 #endif
+#ifdef TW_DATA_ON_SDEXT
+	if (SDCard == NULL) {
+		LOGERR("Unable to locate device to partition.\n");
+		return false;
+	}
+	TWPartition* SDext = Find_Partition_By_Path("/data");
+#else
 	if (SDCard == NULL || !SDCard->Removable || SDCard->Has_Data_Media) {
 		LOGERR("Unable to locate device to partition.\n");
 		return false;
 	}
+	TWPartition* SDext = Find_Partition_By_Path("/sd-ext");
+#endif
 	if (!SDCard->UnMount(true))
 		return false;
-	TWPartition* SDext = Find_Partition_By_Path("/sd-ext");
 	if (SDext != NULL) {
 		if (!SDext->UnMount(true))
 			return false;
@@ -1785,6 +1793,16 @@ int TWPartitionManager::Partition_SDCard(void) {
 			return false;
 		}
 	}
+	if (ext > 0) {
+		if (SDext == NULL) {
+			LOGERR("Unable to locate sd-ext partition.\n");
+			return false;
+		}
+		gui_print("Formatting sd-ext as %s...\n", ext_format.c_str());
+		LOGINFO("Formatting sd-ext after partitioning as %s.\n", ext_format.c_str());
+		SDext->Wipe(ext_format);
+	}
+
 	// recreate TWRP folder and rewrite settings - these will be gone after sdcard is partitioned
 #ifdef TW_EXTERNAL_STORAGE_PATH
 	Mount_By_Path(EXPAND(TW_EXTERNAL_STORAGE_PATH), 1);
@@ -1806,17 +1824,6 @@ int TWPartitionManager::Partition_SDCard(void) {
 	if (DataManager::GetIntValue(TW_USE_EXTERNAL_STORAGE) == 1)
 		DataManager::SetValue(TW_ZIP_LOCATION_VAR, "/sdcard");
 #endif
-	if (ext > 0) {
-		if (SDext == NULL) {
-			LOGERR("Unable to locate sd-ext partition.\n");
-			return false;
-		}
-		Command = "mke2fs -t " + ext_format + " -m 0 " + SDext->Actual_Block_Device;
-		gui_print("Formatting sd-ext as %s...\n", ext_format.c_str());
-		LOGINFO("Formatting sd-ext after partitioning, command: '%s'\n", Command.c_str());
-		TWFunc::Exec_Cmd(Command);
-	}
-
 	Update_System_Details();
 	gui_print("Partitioning complete.\n");
 	return true;
