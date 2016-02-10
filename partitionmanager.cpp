@@ -1710,7 +1710,11 @@ int TWPartitionManager::Partition_SDCard(void) {
                 TWFunc::Exec_Cmd("umount \"$SWAPPATH\"");
 	}
 
+#ifdef TW_DATA_ON_SDEXT
+	Device = SDCard->Primary_Block_Device;
+#else
 	Device = SDCard->Actual_Block_Device;
+#endif
 	// Just use the root block device
 	Device.resize(strlen("/dev/block/mmcblkX"));
 
@@ -1775,7 +1779,8 @@ int TWPartitionManager::Partition_SDCard(void) {
 	}
 	if (ext > 0) {
 		gui_print("Creating EXT partition...\n");
-		Command = "parted " + Device + " mkpartfs primary ext2 " + fat_str + "MB " + ext_str + "MB";
+		// just create the partition, we will format it below
+		Command = "parted " + Device + " mkpart primary " + fat_str + "MB " + ext_str + "MB";
 		LOGINFO("Command is: '%s'\n", Command.c_str());
 		if (TWFunc::Exec_Cmd(Command) != 0) {
 			LOGERR("Unable to create EXT partition.\n");
@@ -1798,9 +1803,7 @@ int TWPartitionManager::Partition_SDCard(void) {
 			LOGERR("Unable to locate sd-ext partition.\n");
 			return false;
 		}
-		gui_print("Formatting sd-ext as %s...\n", ext_format.c_str());
-		LOGINFO("Formatting sd-ext after partitioning as %s.\n", ext_format.c_str());
-		SDext->Wipe(ext_format);
+		Wipe_By_Path(SDext->Mount_Point, ext_format);
 	}
 
 	// recreate TWRP folder and rewrite settings - these will be gone after sdcard is partitioned
